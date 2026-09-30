@@ -1,0 +1,232 @@
+import pandas as pd
+import numpy as np
+import glob
+import os
+import re
+import yfinance as yf
+
+DATA_PATH = "./data/"
+SENTIMENT_PATH = DATA_PATH + "sentiments/"
+MESSAGE_PATH = DATA_PATH + "messages/"
+
+START_PERIOD = "2008-01-01" 
+END_PERIOD = "2023-01-31"
+
+START_PERIOD_PANDA = pd.to_datetime(START_PERIOD)
+
+# ============================================================
+# 1. Utilitaires
+# ============================================================
+
+def parse_symbols(x):
+    """Convertit symbol_list en vraie liste Python."""
+    if isinstance(x, str):
+        return eval(x) if x.startswith("[") else [x]
+    return x
+
+def clean_text(t):
+    """Nettoyage du texte."""
+    t = t.lower()
+    t = re.sub(r"http\S+", "", t)
+    t = re.sub(r"@\w+", "", t)
+    t = re.sub(r"#\w+", "", t)
+    t = re.sub(r"\s+", " ", t)
+    return t.strip()
+
+
+# ============================================================
+# 2. Lecture + filtrage des sentiments (streaming)
+# ============================================================
+
+def load_filtered_sentiments(symbols):
+    sentiment_dfs = []
+
+    for path in glob.glob(SENTIMENT_PATH + "sentiment_*.csv"):
+        print(f"[sentiment] Lecture : {path}")
+
+        s = pd.read_csv(
+            path,
+            usecols=["message_id", "user_id", "created_at", "sentiment", "symbol_list"],
+            dtype={"message_id": "int64"}
+        )
+
+        s["symbol_list"] = s["symbol_list"].apply(parse_symbols)
+
+        # filtrage par symboles
+        s = s[s["symbol_list"].apply(lambda lst: any(sym in symbols for sym in lst))]
+
+        sentiment_dfs.append(s)
+
+    if len(sentiment_dfs) == 0:
+        return pd.DataFrame()
+
+    return pd.concat(sentiment_dfs, ignore_index=True)
+
+
+# ============================================================
+# 3. Lecture + filtrage des messages (streaming)
+# ============================================================
+
+def load_filtered_messages(message_ids):
+    message_dfs = []
+
+    for path in glob.glob(MESSAGE_PATH + "msg_*.csv"):
+        print(f"[messages] Lecture : {path}")
+
+        # Lecture simple, sans dtype
+        #m = pd.read_csv(path, usecols=["message_id", "message_body"], low_memory=False)
+        m = pd.read_csv(
+            path,
+            usecols=["message_id", "message_body"],
+            engine="python",
+            on_bad_lines="skip"
+        )
+
+        # Conversion après lecture
+        m["message_id"] = pd.to_numeric(m["message_id"], errors="coerce")
+        m = m.dropna(subset=["message_id"])
+        m["message_id"] = m["message_id"].apply(lambda x: int(x))
+        m["message_id"] = m["message_id"].astype("Int64")
+
+        # filtrage par message_id
+        m = m[m["message_id"].isin(message_ids)]
+        message_dfs.append(m)
+
+    if len(message_dfs) == 0:
+        return pd.DataFrame()
+
+    return pd.concat(message_dfs, ignore_index=True)
+
+
+
+# ============================================================
+# 4. Pipeline complet
+# ============================================================
+
+def generate_dataframe_sentiment(symbols):
+    print("=== Chargement des sentiments filtrés ===")
+    sentiments = load_filtered_sentiments(symbols)
+
+    assert not sentiments.empty, "Aucun sentiment trouvé pour ces symboles."
+
+    print("=== Chargement des messages filtrés ===")
+    message_ids = set(sentiments["message_id"].unique())
+    messages = load_filtered_messages(message_ids)
+
+    print("=== Jointure messages + sentiments ===")
+    df = messages.merge(sentiments, on="message_id", how="inner")
+
+    # --------------------------------------------------------
+    # Normalisation des types
+    # --------------------------------------------------------
+
+    print("=== Normalisation des types ===")
+
+    # created_at → en day int16
+    df["created_at"] = pd.to_datetime(df["created_at"])
+    df["day"] = (df["created_at"] - START_PERIOD_PANDA).dt.days.astype("int16")
+    df["day"] = df["day"].fillna(-1).astype("int16")
+    df = df.drop(columns=["created_at"])
+
+    # user_id → int32
+    df["user_id"] = df["user_id"].astype("int32")
+
+    # sentiment → bool
+    df["sentiment"] = df["sentiment"].map({"Bullish": True, "Bearish": False}).astype("bool")
+
+    # --------------------------------------------------------
+    # Normalisation de symbol_list → une ligne par symbole 
+    # --------------------------------------------------------
+
+    print("=== Explosion des symboles ===")
+    df["symbol_list"] = df["symbol_list"].apply(parse_symbols)
+    df = df.explode("symbol_list")
+    df = df.rename(columns={"symbol_list": "symbol"})
+    df = df[df["symbol"].isin(symbols)]
+
+    # --------------------------------------------------------
+    # Nettoyage du texte
+    # --------------------------------------------------------
+
+    print("=== Nettoyage du texte ===")
+    df["text_clean"] = df["message_body"].astype("string").apply(clean_text)
+
+    # --------------------------------------------------------
+    # Dataset final compact
+    # --------------------------------------------------------
+
+    final_df = df[[
+        "user_id",
+        "day",
+        "symbol",
+        "sentiment",
+        "text_clean",
+    ]]
+
+    return final_df
+
+
+def generate_dataframe_finance(symbols):
+    tickers = yf.Tickers(symbols)
+
+    # Vérification des tickers invalides via fast_info
+    tickers_without_desc = [t.ticker for t in tickers.tickers.values() if t.fast_info is None]
+    assert len(tickers_without_desc) == 0, f"Ticker(s) inconnu(s) : {tickers_without_desc}"
+
+    # Télécharger les cours
+    df = tickers.download(start=START_PERIOD, end=END_PERIOD)
+
+    # Calculer l'index "day"
+    delta = df.index - START_PERIOD_PANDA
+    df["day"] = delta.days.astype("int16")
+
+    # Extraire uniquement les colonnes Close
+    df_close = df.xs("Close", level=0, axis=1)
+
+    # IMPORTANT : garder day comme colonne AVANT stack
+    df_close = df_close.assign(day=df["day"])
+
+    # stack propre : day reste une colonne, pas un index
+    df_final = df_close.melt(id_vars="day", var_name="ticker", value_name="Close")
+
+    # Ajout des prévisions
+    df_final["J+1"]  = (df_final.groupby("ticker")["Close"].shift(-1)  > df_final["Close"])
+    df_final["J+3"]  = (df_final.groupby("ticker")["Close"].shift(-3)  > df_final["Close"])
+    df_final["J+7"]  = (df_final.groupby("ticker")["Close"].shift(-7)  > df_final["Close"])
+    df_final["J+30"] = (df_final.groupby("ticker")["Close"].shift(-30) > df_final["Close"])
+
+    return df_final
+
+
+
+def generate_dataframe(symbols):
+    filename = f"df_{'_'.join(symbols)}.parquet"
+
+    if os.path.exists(filename):
+        print(f"=== Fichier déjà existant : {filename} ===")
+        return pd.read_parquet(filename)
+
+    print("=== Génération ===")
+    df_sentiment = generate_dataframe_sentiment(symbols)
+    print("df de generate_dataframe_sentiment")
+    print(df_sentiment["day"])
+    df_finance = generate_dataframe_finance(symbols)
+    print("df de generate_dataframe_finance")
+    print(df_finance["day"])    
+    resultat = df_sentiment.merge(df_finance, on="day", how="inner")
+
+    print("=== Sauvegarde ===")
+    resultat.to_parquet(filename, compression="zstd")
+
+    print(f"=== Sauvegardé dans {filename} ===")
+    return resultat
+
+
+# ============================================================
+# Exemple d’appel
+# ============================================================
+
+if __name__ == "__main__":
+    SYMBOLS = ["AAPL", "MSFT", "TSLA", "GOOG", "NVDA"]
+    df = generate_dataframe(SYMBOLS)
+    print(df.head())

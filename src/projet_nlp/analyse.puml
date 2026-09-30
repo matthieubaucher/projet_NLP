@@ -1,4 +1,4 @@
-@startuml
+@startuml Projet NLP
 
 skinparam rectangle {
   RoundCorner 15
