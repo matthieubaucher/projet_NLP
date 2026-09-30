@@ -59,24 +59,44 @@ Le résultat est un réseau dédié uniquement au label.
 end note
 
 
-rectangle "Création d'un DataFrame contenant les informations nécessaires\nDF(date, code_titre, nombre_tweets_hausse, nombre_tweets_baisse, mouvement_J1, mouvement_J3, mouvement_J7, mouvement_J30)" as Q2_task_1 #e0ff1a
+rectangle "Création d'un DataFrame contenant les informations nécessaires\nDF(date, code_titre, nombre_tweets_hausse, nombre_tweets_baisse, mouvement_J1, mouvement_J3, mouvement_J7, mouvement_J30)" as Q1_task_2 #e0ff1a
 
 
-note bottom of Q2_task_1
+note bottom of Q1_task_2
   On récupère les données des csv, les deux seuls csv intéressants que je vois sont :
 
   - msg_000.csv
-  messages: message_id, message_body : 
+  messages: message_id, message_body  
 
   - sentiment_00.csv
-  sentiments: message_id, user_id, created_at, sentiment, symbol_list : 
+  sentiments: message_id, user_id, created_at, sentiment, symbol_list  
 
-  symbol_list sera à splitter pour créer plusieures lignes (on normalise ...)
+  Procédure :
+   - symbol_list sera à splitter pour créer plusieures lignes (on normalise ...)
+   - created_at : transformé en un numéro de jours après le début des données
+   - user_id, sentiment, symbol : transformation en type plus simples
+   - on filtre pour ne garder que certains symboles qui nous intéressent
 
-  Ensuite il faut récupérer les mouvements des titres pour les 5 horizons de temps (J1, J3, J7, J30) 
+  Le dataframe est sauvegardée avec un nom qui contient la liste de symbole
+  Il est notre point d'entrée pour toutes nos analyses
+end note
+
+note bottom of Q1_task_2
+  Récupération les mouvements des titres via yfinance pour les 5 horizons de temps (J1, J3, J7, J30) 
   et créer un df dédié "mouvements" symbol, date, mouvement_J1, mouvement_J3, mouvement_J7, mouvement_J30.
   Jx est un booléen pour dire HAUSSE ou BAISSE apres x jours ouvrés
 end note
+
+note bottom of Q1_task_2
+  Avoir une table de test pour tester nos modèles sur 100 tweets bien équilibrés HAUSSE/BAISSE :
+  - 40 "faciles" : sentiments de la table = sentiments prédit par le modèle de l'article (25 hausses 25 baisses)
+  - 30 "moyen" : sentiments avec prédictions fausses avec le modèle de l'article mais ok avec le modèle FinBert
+  - 30 "dur" : sentiments avec prédictions fausses par FinBert et prédit par humain et sans sarcasmes
+  Cela donne une note de 0 à 100 pour un modèle que l'on pourrait créer
+end note
+
+rectangle "on essaye de reproduire ce que l'article propose" as Q2_task_1 #e0ff1a
+
 
 note bottom of Q2_task_1
 On doit utiliser le modèle de la question 1 pour avoir bien plus d'étiquettes
@@ -86,10 +106,7 @@ on retire les colonnes inutiles.
 on crée ainsi un df sentiment_complet
 end note
 
-
-rectangle "on essaye de reproduire ce que l'article propose" as Q2_task_2 #e0ff1a
-
-note right of Q2_task_2
+note right of Q2_task_1
 c'est à dire les liens entre :
 - ratios hausse / mouvements
 - ratios hausse / std(mouvements)
@@ -99,6 +116,9 @@ c'est à dire les liens entre :
 - ensuite on peut explorer d'autres relations possibles
 pour cette question je pense qu'une simple analyse de correlation suffit
 end note
+
+
+
 
 note bottom of Q3 
 Si on compare les labels inférés aux labels déjà existants, on verra des différences dans certains cas.
@@ -142,8 +162,8 @@ ProjetNLP -down-> Q3
 ProjetNLP -down-> Q4
 ProjetNLP -down-> Q5
 Q1 -down-> Q1_task_1
+Q1 -down-> Q1_task_2
 Q2 -down-> Q2_task_1
-Q2 -down-> Q2_task_2
-Q2_task_1 -right-> Q2_task_2
+
 
 @enduml
