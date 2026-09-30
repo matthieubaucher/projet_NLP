@@ -7,7 +7,14 @@ authors = [
     { name = "Matthieu Baucher", email = "ttbaucher@gmail.com" }
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "matplotlib>=3.11.2",
+    "missingno>=0.5.2",
+    "numpy>=2.4.6",
+    "pandas>=3.0.6",
+    "seaborn>=0.13.2",
+    "yfinance>=1.7.0",
+]
 
 [project.scripts]
 projet-nlp = "projet_nlp:main"
