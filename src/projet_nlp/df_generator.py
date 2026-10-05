@@ -4,6 +4,9 @@ import glob
 import os
 import re
 import yfinance as yf
+from multiprocessing import Pool
+import time
+import hashlib
 
 DATA_PATH = "./data/"
 SENTIMENT_PATH = DATA_PATH + "sentiments/"
@@ -26,6 +29,8 @@ def parse_symbols(x):
 
 def clean_text(t):
     """Nettoyage du texte."""
+    if pd.isna(t):
+        t = ""
     t = t.lower()
     t = re.sub(r"http\S+", "", t)
     t = re.sub(r"@\w+", "", t)
@@ -38,12 +43,10 @@ def clean_text(t):
 # 2. Lecture + filtrage des sentiments (streaming)
 # ============================================================
 
-def load_filtered_sentiments(symbols):
-    sentiment_dfs = []
+def _load_one_sentiment(args):
+    path, symbols = args
 
-    for path in glob.glob(SENTIMENT_PATH + "sentiment_*.csv"):
-        print(f"[sentiment] Lecture : {path}")
-
+    try:
         s = pd.read_csv(
             path,
             usecols=["message_id", "user_id", "created_at", "sentiment", "symbol_list"],
@@ -54,27 +57,45 @@ def load_filtered_sentiments(symbols):
 
         # filtrage par symboles
         s = s[s["symbol_list"].apply(lambda lst: any(sym in symbols for sym in lst))]
+        print(f"[sentiment] Lecture : {path} ok")
+        return s
 
-        sentiment_dfs.append(s)
-
-    if len(sentiment_dfs) == 0:
+    except Exception as e:
+        print(f"[ERREUR] {path} : {e}")
         return pd.DataFrame()
 
-    return pd.concat(sentiment_dfs, ignore_index=True)
+def load_filtered_sentiments(symbols):
+    filename = f"dfs_{'_'.join(symbols)}.parquet"
+
+    if os.path.exists(filename):
+        print(f"=== Fichier déjà existant : {filename} ===")
+        return pd.read_parquet(filename)
+
+    paths = glob.glob(SENTIMENT_PATH + "sentiment_*.csv")
+
+    with Pool() as pool:
+        dfs = pool.map(_load_one_sentiment, [(p, symbols) for p in paths])
+
+    if len(dfs) == 0:
+        return pd.DataFrame()
+
+    print("concat sentiments ...")
+    resultat = pd.concat(dfs, ignore_index=True)
+
+    print("=== Sauvegarde ===")
+    resultat.to_parquet(filename, compression="zstd")
+
+    return resultat
 
 
 # ============================================================
 # 3. Lecture + filtrage des messages (streaming)
 # ============================================================
 
-def load_filtered_messages(message_ids):
-    message_dfs = []
+def _load_one_file_messages(args):
+    path, message_ids = args
 
-    for path in glob.glob(MESSAGE_PATH + "msg_*.csv"):
-        print(f"[messages] Lecture : {path}")
-
-        # Lecture simple, sans dtype
-        #m = pd.read_csv(path, usecols=["message_id", "message_body"], low_memory=False)
+    try:
         m = pd.read_csv(
             path,
             usecols=["message_id", "message_body"],
@@ -82,21 +103,71 @@ def load_filtered_messages(message_ids):
             on_bad_lines="skip"
         )
 
-        # Conversion après lecture
         m["message_id"] = pd.to_numeric(m["message_id"], errors="coerce")
         m = m.dropna(subset=["message_id"])
-        m["message_id"] = m["message_id"].apply(lambda x: int(x))
+        m = m[m["message_id"] % 1 == 0] # pour pas garder les ids avec des floats
         m["message_id"] = m["message_id"].astype("Int64")
 
-        # filtrage par message_id
-        m = m[m["message_id"].isin(message_ids)]
-        message_dfs.append(m)
+        result = m[m["message_id"].isin(message_ids)]
+        print(f"[message] Lecture : {path} ok")
+        return result
 
-    if len(message_dfs) == 0:
+    except Exception as e:
+        print(f"[ERREUR] {path} : {e}")
         return pd.DataFrame()
 
-    return pd.concat(message_dfs, ignore_index=True)
 
+def split_paths(paths, k):
+    size = len(paths) // k + 1
+    return [paths[i:i+size] for i in range(0, len(paths), size)]
+
+def load_filtered_messages_pack(message_ids, paths):
+    with Pool() as pool:
+        dfs = pool.map(_load_one_file_messages, [(p, message_ids) for p in paths])
+
+    if len(dfs) == 0:
+        return pd.DataFrame()
+
+    print("concat messages pack ...")
+    return pd.concat(dfs, ignore_index=True)
+
+def stable_hash(ids):
+    s = ",".join(str(i) for i in sorted(ids))
+    return hashlib.sha1(s.encode()).hexdigest()
+
+def load_filtered_messages(message_ids):
+    k = 10
+    filename = "dfm" + stable_hash(message_ids) + ".parquet"
+
+    if os.path.exists(filename):
+        print(f"=== Fichier déjà existant : {filename} ===")
+        return pd.read_parquet(filename)
+
+    paths = glob.glob(MESSAGE_PATH + "msg_*.csv")
+    path_groups = split_paths(paths, k)
+
+    packs = []
+
+    i = 0
+    for group in path_groups:
+        i+=1
+        print(f"=== Chargement d'un pack {i} de messages ... ===")
+        start = time.time()
+        df_pack = load_filtered_messages_pack(message_ids, group)
+        elapsed = time.time() - start
+        print(f"Pack {i} terminé en {elapsed:.2f} sec")
+        packs.append(df_pack)
+
+    print("concat final ...")
+    start = time.time()
+    result = pd.concat(packs, ignore_index=True)
+    elapsed = time.time() - start
+    print(f"Concat final terminé en {elapsed:.2f} sec")
+
+    print("=== Sauvegarde ===")
+    result.to_parquet(filename, compression="zstd")
+
+    return result
 
 
 # ============================================================
@@ -174,7 +245,14 @@ def generate_dataframe_finance(symbols):
     assert len(tickers_without_desc) == 0, f"Ticker(s) inconnu(s) : {tickers_without_desc}"
 
     # Télécharger les cours
-    df = tickers.download(start=START_PERIOD, end=END_PERIOD)
+    filename = f"dfc_{'_'.join(symbols)}.parquet"
+    if os.path.exists(filename):
+            print(f"=== Fichier déjà existant : {filename} ===")
+            df = pd.read_parquet(filename)
+    else:
+        df = tickers.download(start=START_PERIOD, end=END_PERIOD)
+        print("=== Sauvegarde ===")
+        df.to_parquet(filename, compression="zstd")
 
     # Calculer l'index "day"
     delta = df.index - START_PERIOD_PANDA
