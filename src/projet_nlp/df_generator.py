@@ -7,15 +7,18 @@ import yfinance as yf
 from multiprocessing import Pool
 import time
 import hashlib
+import ast
 
 DATA_PATH = "./data/"
 SENTIMENT_PATH = DATA_PATH + "sentiments/"
+FEATURE_WO_MSG_PATH = DATA_PATH + "feature_wo_messages/"
 MESSAGE_PATH = DATA_PATH + "messages/"
 
 START_PERIOD = "2008-01-01" 
 END_PERIOD = "2023-01-31"
 
-START_PERIOD_PANDA = pd.to_datetime(START_PERIOD)
+START_PERIOD_PANDA_NAIVE = pd.to_datetime(START_PERIOD)
+START_PERIOD_PANDA = START_PERIOD_PANDA_NAIVE.tz_localize("UTC")
 
 # ============================================================
 # 1. Utilitaires
@@ -170,6 +173,66 @@ def load_filtered_messages(message_ids):
     return result
 
 
+def _load_one_wo(args):
+    path, symbols = args
+    symbols_set = set(symbols)
+
+    try:
+        df = pd.read_csv(path)
+    except Exception as e:
+        print(f"Erreur lecture {path}: {e}")
+        return pd.DataFrame()
+
+    # Vérifier que la colonne existe
+    if "symbol_list" not in df.columns:
+        return pd.DataFrame()
+
+    # Convertir la chaîne "['SKF','BWEN']" → ['SKF','BWEN']
+    def safe_parse(x):
+        try:
+            return ast.literal_eval(x)
+        except Exception:
+            return []
+
+    df["symbol_list"] = df["symbol_list"].apply(safe_parse)
+    df["match"] = df["symbol_list"].apply(lambda lst: bool(symbols_set.intersection(lst)))
+    return df.loc[df["match"], ["message_id", "symbol_list", "created_at", "user_id"]]
+
+
+
+def load_message_ids_with_symbols_df(symbols):
+    filename = f"dfw_{'_'.join(symbols)}.parquet"
+
+    if os.path.exists(filename):
+        print(f"=== Fichier déjà existant : {filename} ===")
+        return pd.read_parquet(filename)
+
+    paths = glob.glob(FEATURE_WO_MSG_PATH + "feature_wo_messages_*.csv")
+
+    with Pool() as pool:
+        dfw = pool.map(_load_one_wo, [(p, symbols) for p in paths])
+
+    if len(dfw) == 0:
+        return pd.DataFrame()
+
+    print("concat feature ...")
+    resultat = pd.concat(dfw, ignore_index=True)
+
+    print("=== Sauvegarde ===")
+    resultat.to_parquet(filename, compression="zstd")
+
+    return resultat
+
+
+
+def get_message_ids_from_symbols(symbols):
+    wo = load_message_ids_with_symbols_df(symbols)
+    result = wo[wo["symbol_list"].apply(lambda lst: any(sym in symbols for sym in lst))]
+    resultat = set(result["message_id"].unique())
+    return resultat, result[["message_id", "created_at", "user_id", "symbol_list"]]
+
+
+
 # ============================================================
 # 4. Pipeline complet
 # ============================================================
@@ -181,11 +244,14 @@ def generate_dataframe_sentiment(symbols):
     assert not sentiments.empty, "Aucun sentiment trouvé pour ces symboles."
 
     print("=== Chargement des messages filtrés ===")
-    message_ids = set(sentiments["message_id"].unique())
+    #message_ids = set(sentiments["message_id"].unique())
+    message_ids, df_wo = get_message_ids_from_symbols(symbols)
     messages = load_filtered_messages(message_ids)
+    messages = messages.merge(df_wo, on="message_id", how="inner")
+    sentiments = sentiments.drop(columns=["created_at","user_id","symbol_list"])
 
     print("=== Jointure messages + sentiments ===")
-    df = messages.merge(sentiments, on="message_id", how="inner")
+    df = messages.merge(sentiments, on="message_id", how="left")
 
     # --------------------------------------------------------
     # Normalisation des types
@@ -194,16 +260,18 @@ def generate_dataframe_sentiment(symbols):
     print("=== Normalisation des types ===")
 
     # created_at → en day int16
+    df.dropna(subset=["created_at"], inplace=True)
     df["created_at"] = pd.to_datetime(df["created_at"])
     df["day"] = (df["created_at"] - START_PERIOD_PANDA).dt.days.astype("int16")
     df["day"] = df["day"].fillna(-1).astype("int16")
     df = df.drop(columns=["created_at"])
 
     # user_id → int32
+    print("users ids null :", df["user_id"].isna().count())
     df["user_id"] = df["user_id"].astype("int32")
 
     # sentiment → bool
-    df["sentiment"] = df["sentiment"].map({"Bullish": True, "Bearish": False}).astype("bool")
+    df["sentiment"] = df["sentiment"].map({1: "HAUSSE", -1: "BAISSE"}).fillna("UNKNOWN").astype("category")
 
     # --------------------------------------------------------
     # Normalisation de symbol_list → une ligne par symbole 
@@ -255,7 +323,7 @@ def generate_dataframe_finance(symbols):
         df.to_parquet(filename, compression="zstd")
 
     # Calculer l'index "day"
-    delta = df.index - START_PERIOD_PANDA
+    delta = df.index - START_PERIOD_PANDA_NAIVE
     df["day"] = delta.days.astype("int16")
 
     # Extraire uniquement les colonnes Close
@@ -277,7 +345,7 @@ def generate_dataframe_finance(symbols):
 
 
 
-def generate_dataframe(symbols):
+def generate_dataframe(symbols, keep_wend_msg=True):
     filename = f"df_{'_'.join(symbols)}.parquet"
 
     if os.path.exists(filename):
@@ -287,17 +355,32 @@ def generate_dataframe(symbols):
     print("=== Génération ===")
     df_sentiment = generate_dataframe_sentiment(symbols)
     print("df de generate_dataframe_sentiment OK")
-    #print(df_sentiment["day"])
     df_finance = generate_dataframe_finance(symbols)
     print("df de generate_dataframe_finance OK")
-    #print(df_finance["day"])    
-    resultat = df_sentiment.merge(
-        df_finance,
-        left_on=["day", "symbol"],
-        right_on=["day", "ticker"],
-        how="inner"
-    )
+ 
+    if keep_wend_msg:
+        df_finance_sorted = df_finance.sort_values("day")
+        df_sentiment_sorted = df_sentiment.sort_values("day")
+
+        resultat = pd.merge_asof(
+            df_sentiment_sorted,
+            df_finance_sorted,
+            on="day",
+            left_by="symbol",
+            right_by="ticker",
+            direction="backward"
+        )
+    else:
+        # Ici la jointure suprime les messages des jours sans cotations (ex: samedi)
+        resultat = df_sentiment.merge(  
+            df_finance,
+            left_on=["day", "symbol"],
+            right_on=["day", "ticker"],
+            how="inner"
+        )
+
     resultat = resultat.drop(columns=["symbol"])
+
 
     print("=== Sauvegarde ===")
     resultat.to_parquet(filename, compression="zstd")

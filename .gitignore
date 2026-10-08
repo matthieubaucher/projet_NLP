@@ -13,3 +13,4 @@ wheels/
 data
 mini_data
 *.parquet
+scratch
