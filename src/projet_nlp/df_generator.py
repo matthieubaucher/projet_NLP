@@ -151,7 +151,7 @@ def load_filtered_messages(message_ids):
     i = 0
     for group in path_groups:
         i+=1
-        print(f"=== Chargement d'un pack {i} de messages ... ===")
+        print(f"=== Chargement du pack n°{i} de messages ... ===")
         start = time.time()
         df_pack = load_filtered_messages_pack(message_ids, group)
         elapsed = time.time() - start
@@ -286,12 +286,18 @@ def generate_dataframe(symbols):
 
     print("=== Génération ===")
     df_sentiment = generate_dataframe_sentiment(symbols)
-    print("df de generate_dataframe_sentiment")
-    print(df_sentiment["day"])
+    print("df de generate_dataframe_sentiment OK")
+    #print(df_sentiment["day"])
     df_finance = generate_dataframe_finance(symbols)
-    print("df de generate_dataframe_finance")
-    print(df_finance["day"])    
-    resultat = df_sentiment.merge(df_finance, on="day", how="inner")
+    print("df de generate_dataframe_finance OK")
+    #print(df_finance["day"])    
+    resultat = df_sentiment.merge(
+        df_finance,
+        left_on=["day", "symbol"],
+        right_on=["day", "ticker"],
+        how="inner"
+    )
+    resultat = resultat.drop(columns=["symbol"])
 
     print("=== Sauvegarde ===")
     resultat.to_parquet(filename, compression="zstd")
@@ -301,10 +307,10 @@ def generate_dataframe(symbols):
 
 
 # ============================================================
-# Exemple d’appel
+# Pour tester (attention c'est long !)
 # ============================================================
 
 if __name__ == "__main__":
-    SYMBOLS = ["AAPL", "MSFT", "TSLA", "GOOG", "NVDA"]
+    SYMBOLS = ["TSLA","AAPL"]
     df = generate_dataframe(SYMBOLS)
     print(df.head())
