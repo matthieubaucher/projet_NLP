@@ -3,18 +3,24 @@ name = "projet-nlp"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
+
+
 authors = [
     { name = "Matthieu Baucher", email = "ttbaucher@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = "==3.12.*"
 dependencies = [
-    "matplotlib>=3.11.2",
-    "missingno>=0.5.2",
     "numpy>=2.4.6",
     "pandas>=3.0.6",
-    "pyarrow>=25.0.1",
-    "seaborn>=0.13.2",
+    "pyarrow>=26.0.0",
+    "transformers==4.44.2",
+    "torch==2.14.1",
     "yfinance>=1.7.0",
+    "onnxruntime-gpu>=1.31.0",
+    "sentence-transformers>=5.7.0",
+    "matplotlib>=3.11.2",
+    "seaborn>=0.13.2",
+    "missingno>=0.5.2",
 ]
 
 [project.scripts]
