@@ -5,6 +5,9 @@ import pandas as pd
 from tqdm import tqdm
 import pyarrow as pa
 import pyarrow.parquet as pq
+from projet_nlp.model_sentiment.Trainer import Trainer
+import jax
+import numpy as np
 
 
 FINBERT_TONE = "yiyanghkust/finbert-tone" # SOTA pour embeddings financiers
@@ -69,3 +72,78 @@ def add_message_embedding(df, regenerer=False ,model_name=FINBERT_TONE, taille_m
     )
 
     return df
+
+
+# Ajoute une colonne generated_sentiment au df (mais pas inPlace) calculé à partir du modèle donné
+# Nécessite la présence d'une colonne "msg_embedding" pour fonctionner
+# Nécessite que au moins certaines lignes soient déjà annotée avec des sentiments
+# Les lignes qui possèdent déjà des sentiments servent à l'entrainement
+#
+# OUT :
+#
+#  - le dataframe avec une colonne "generated_sentiment" en plus remplis grace au modèle fourni
+#  en paramètre
+#
+# # IN/OUT : 
+#
+#  - model : le modèle a utiliser, celui est renvoyé entrainé
+#
+# IN :
+#
+#  - df : le dataframe de départ
+#
+def add_generated_sentiment(df, model, batch_size = 256):
+    
+    # Préparation du train
+
+    assert "msg_embedding" in df.columns
+    df_train = df[df["sentiment"]!="UNKNOWN"]
+    X_train = np.stack(df_train["msg_embedding"].to_numpy())
+    Y_train = df_train["sentiment"].astype(str).map({"BAISSE": 0, "HAUSSE": 1}).to_numpy().astype(int)  
+
+    print(f"Nombre d'éléments pour l'entrainement = {len(df_train)}")
+
+
+    # Création du Trainer
+
+    embedding_dim = X_train[0].shape[0]
+    input_shape = (batch_size, embedding_dim)
+    rng = jax.random.PRNGKey(0)
+    trainer = Trainer(model, rng, input_shape)
+
+
+    # Entrainement avec le Trainer
+
+    print("Entrainement")
+    trainer.fit(X_train, Y_train, batch_size=batch_size, epochs=50)
+
+
+    # Utilisation du modèle pour remplir la colonne "generated_sentiment"
+
+    print("Inférence")
+    X = np.stack(df["msg_embedding"].to_numpy())  
+    Y = model.predict(X)   
+    mapping = np.array(["BAISSE", "HAUSSE"])
+    df["generated_sentiment"] = mapping[Y]
+
+    return df
+
+
+# pour l'inférence uniquement. et tester ...
+def inference_generated_sentiment(df, model):
+    
+    # Utilisation du modèle pour remplir la colonne "generated_sentiment"
+
+    print("Inférence")
+    X = np.stack(df["msg_embedding"].to_numpy())  
+    Y = model.predict(X)                     
+    mapping = np.array(["BAISSE", "HAUSSE"])
+    df["generated_sentiment"] = mapping[Y]
+
+    df_tested = df[df["sentiment"]!="UNKNOWN"]
+
+    ok = (df_tested["sentiment"] == df_tested["generated_sentiment"]).sum()
+    nb = len(df_tested)
+    score = 100 * ok / nb
+
+    return df, score
