@@ -8,6 +8,7 @@ import numpy as np
 class Modele(nn.Module):
     n_outputs: int = 2
     state: train_state.TrainState = None   # poids + état de l'optimiseur
+    initial_learning_rate: int = 0.001
 
     def init_state(self, rng, input_shape, learning_rate):
         rng, init_rng = jax.random.split(rng)
@@ -17,13 +18,14 @@ class Modele(nn.Module):
         params = self.init(init_rng, init_x)
 
         # optimiseur
+        self.initial_learning_rate = learning_rate
         tx = optax.adam(learning_rate)
 
         # TrainState = params + apply_fn + optimiseur
         self.state = train_state.TrainState.create(
             apply_fn=self.apply,
             params=params,
-            tx=tx,
+            tx=tx
         )
         return self.state
 
@@ -36,7 +38,7 @@ class Modele(nn.Module):
         params = self.state.params
 
         # Probabilités directement
-        probs = jax.vmap(lambda x: apply_fn(params, x))(X)  # (N, 2)
+        probs = jax.vmap(lambda x: apply_fn(params, x, train=False))(X)  # (N, 2)
 
         # Classe = argmax
         classes = jnp.argmax(probs, axis=1)

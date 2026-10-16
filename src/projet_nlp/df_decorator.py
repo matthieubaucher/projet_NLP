@@ -40,8 +40,9 @@ def encode_in_batches(texts, model_name, batch_size=2048):
 #  - regenerer : si oui alors on refait le calcul et on écrase la sauvegarde
 #  - model_name : nom du modèle à utiliser. ex : FINBERT_TONE, MINI_LM, MPNET, ROBERTA, FINBERT
 #  - taille_max : pioche ce nombre d'élément au hasard dans df
+#  - excluded_df : exclusion de toutes lignes de ce dataframe dans le df pris (utile pour exclure un train et générer un test)
 #
-def add_message_embedding(df, regenerer=False ,model_name=FINBERT_TONE, taille_max = 0):
+def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FINBERT_TONE, taille_max = 0):
     tickers = sorted(df["ticker"].unique())
     tickers_name = "".join(f"_{t}" for t in tickers)
     filename = f"df_with_msg_embeddings{tickers_name}_{model_name.replace("/","_")}_{taille_max}.parquet"
@@ -49,6 +50,9 @@ def add_message_embedding(df, regenerer=False ,model_name=FINBERT_TONE, taille_m
     if os.path.exists(filename) and not regenerer:
         print(f"=== Fichier déjà existant : {filename} ===")
         return pd.read_parquet(filename)
+
+    if excluded_df is not None:
+        df = df[~df.index.isin(excluded_df.index)]
 
     if taille_max>0:
         print(f"Creation d'un df de taille {taille_max} sur {len(df)} existants")
@@ -92,7 +96,7 @@ def add_message_embedding(df, regenerer=False ,model_name=FINBERT_TONE, taille_m
 #
 #  - df : le dataframe de départ
 #
-def add_generated_sentiment(df, model, batch_size = 256):
+def train_and_add_generated_sentiment(df, model, batch_size = 256):
     
     # Préparation du train
 
@@ -115,7 +119,7 @@ def add_generated_sentiment(df, model, batch_size = 256):
     # Entrainement avec le Trainer
 
     print("Entrainement")
-    trainer.fit(X_train, Y_train, batch_size=batch_size, epochs=50)
+    trainer.fit(X_train, Y_train, batch_size=batch_size, epochs=500)
 
 
     # Utilisation du modèle pour remplir la colonne "generated_sentiment"
@@ -130,7 +134,7 @@ def add_generated_sentiment(df, model, batch_size = 256):
 
 
 # pour l'inférence uniquement. et tester ...
-def inference_generated_sentiment(df, model):
+def inference_and_add_generated_sentiment(df, model):
     
     # Utilisation du modèle pour remplir la colonne "generated_sentiment"
 
