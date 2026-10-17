@@ -5,16 +5,13 @@ import pandas as pd
 from tqdm import tqdm
 import pyarrow as pa
 import pyarrow.parquet as pq
-from projet_nlp.model_sentiment.Trainer import Trainer
-import jax
-import numpy as np
+from projet_nlp.model_sentiment.EmbeddingClassifier import EmbeddingClassifier
 
+
+# Pour de l'embedding
 
 FINBERT_TONE = "yiyanghkust/finbert-tone" # SOTA pour embeddings financiers
-MINI_LM = "sentence-transformers/all-MiniLM-L12-v2" # modèle plus petit et rapide, embeddings 384
-MPNET = "sentence-transformers/all-mpnet-base-v2" # tres bon modèle généraliste
 ROBERTA = "cardiffnlp/twitter-roberta-base" # compromis vitesse/qualité
-FINBERT = "ProsusAI/finbert"  # mieux pour sentiments, moins bien pour embeddings
 
 
 def encode_in_batches(texts, model_name, batch_size=2048):
@@ -78,74 +75,62 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FI
     return df
 
 
-# Ajoute une colonne generated_sentiment au df (mais pas inPlace) calculé à partir du modèle donné
-# Nécessite la présence d'une colonne "msg_embedding" pour fonctionner
-# Nécessite que au moins certaines lignes soient déjà annotée avec des sentiments
-# Les lignes qui possèdent déjà des sentiments servent à l'entrainement
+# Entraine un modèle à embeddings sur les sentiments
+# Nécessite que au moins certaines lignes soient déjà annotée avec des sentiments pour servir à l'entrainement
 #
-# OUT :
+# OUT : le modèle entrainé
 #
-#  - le dataframe avec une colonne "generated_sentiment" en plus remplis grace au modèle fourni
-#  en paramètre
+# IN : 
+#  - model_name : le nom du modèle à embedding à utiliser et à entrainer. 
+#  - df : le dataframe pour s'entrainer (tout est utilisé)
 #
-# # IN/OUT : 
-#
-#  - model : le modèle a utiliser, celui est renvoyé entrainé
-#
-# IN :
-#
-#  - df : le dataframe de départ
-#
-def train_and_add_generated_sentiment(df, model, batch_size = 256):
+def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier"):
     
     # Préparation du train
-
-    assert "msg_embedding" in df.columns
     df_train = df[df["sentiment"]!="UNKNOWN"]
-    X_train = np.stack(df_train["msg_embedding"].to_numpy())
-    Y_train = df_train["sentiment"].astype(str).map({"BAISSE": 0, "HAUSSE": 1}).to_numpy().astype(int)  
 
+    # On prend autant de HAUSSE que de BAISSE
+    count_baisse = (df["sentiment"]=="BAISSE").sum()
+    count_hausse = (df["sentiment"]=="HAUSSE").sum()
+    if count_baisse<count_hausse:
+        df_baisse = df[df["sentiment"] == "BAISSE"]
+        df_hausse = df[df["sentiment"] == "HAUSSE"]
+        df_hausse_balanced = df_hausse.sample(len(df_baisse), random_state=42)
+        df_train = pd.concat([df_baisse, df_hausse_balanced]).sample(frac=1, random_state=42)
+
+    X_train = df_train["message"].astype(str).to_list()
+    Y_train = df_train["sentiment"].astype(str).map({"BAISSE": 0, "HAUSSE": 1}).to_numpy().astype(int)
+    train = list(zip(X_train, Y_train))
+    
     print(f"Nombre d'éléments pour l'entrainement = {len(df_train)}")
 
+    # Création du modèle
+    model = EmbeddingClassifier(model_name, nom_sauvegarde).cuda()
 
-    # Création du Trainer
+    # Entrainement (25 minutes environ)
+    model.entraine(train, epochs=5, epochfinetune=4, lr=1e-4)
+    model.entraine(train, epochs=0, epochfinetune=5, lr=5e-5)
+    model.entraine(train, epochs=0, epochfinetune=3, lr=25e-5)
 
-    embedding_dim = X_train[0].shape[0]
-    input_shape = (batch_size, embedding_dim)
-    rng = jax.random.PRNGKey(0)
-    trainer = Trainer(model, rng, input_shape)
-
-
-    # Entrainement avec le Trainer
-
-    print("Entrainement")
-    trainer.fit(X_train, Y_train, batch_size=batch_size, epochs=500)
+    return model
 
 
-    # Utilisation du modèle pour remplir la colonne "generated_sentiment"
-
+# Utilise un modèle entrainé pour rajouter une colonne generated_sentiment
+# IN : le modèle et le dataframe à décorer
+# OUT : le dataframe (qui a aussi été modifier inplace), et le score de précision
+def add_generated_sentiment(df, model, batch_size=512):
     print("Inférence")
-    X = np.stack(df["msg_embedding"].to_numpy())  
-    Y = model.predict(X)   
-    mapping = np.array(["BAISSE", "HAUSSE"])
-    df["generated_sentiment"] = mapping[Y]
 
-    return df
-
-
-# pour l'inférence uniquement. et tester ...
-def inference_and_add_generated_sentiment(df, model):
-    
-    # Utilisation du modèle pour remplir la colonne "generated_sentiment"
-
-    print("Inférence")
-    X = np.stack(df["msg_embedding"].to_numpy())  
-    Y = model.predict(X)                     
-    mapping = np.array(["BAISSE", "HAUSSE"])
-    df["generated_sentiment"] = mapping[Y]
+    sentences = df["message"].astype(str).to_list()
+   
+    sentiments =[]
+    for i in tqdm(range(0, len(sentences), batch_size), desc="Inférence"):
+        batch = sentences[i:i+batch_size]
+        sentiments_pack = model.predict(batch)   
+        sentiments.extend(sentiments_pack)
+    df["generated_sentiment"] = sentiments
 
     df_tested = df[df["sentiment"]!="UNKNOWN"]
-
     ok = (df_tested["sentiment"] == df_tested["generated_sentiment"]).sum()
     nb = len(df_tested)
     score = 100 * ok / nb

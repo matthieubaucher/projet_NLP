@@ -1,8 +1,9 @@
 from projet_nlp.dataframe_generator import get_df_for_sentiment_analysis 
-from projet_nlp.df_decorator import add_message_embedding, train_and_add_generated_sentiment, inference_and_add_generated_sentiment
-from projet_nlp.model_sentiment.MLP import MLP
+from projet_nlp.df_decorator import train_embedding_model, add_generated_sentiment
+from sklearn.model_selection import train_test_split
+from projet_nlp.model_sentiment.EmbeddingClassifier import EmbeddingClassifier, load_model
 
-# chargement des sentiments
+# Chargement des sentiments
 
 tickers = ["TSLA","AAPL"]
 df = get_df_for_sentiment_analysis(tickers)
@@ -10,32 +11,37 @@ print(df["sentiment"].value_counts(dropna=False))
 print(df.head())
 print("")
 
-# construction du model pour transformer les tweets en embeddings (1h15 de calculs estimé)
 
-df_train = add_message_embedding(df, taille_max = 100000, regenerer=False)
+# Création des dataset de train et de test
 
-# pour voir ce que cela donne ...
+df = df.sample(n=10000, random_state=42)
+df_train, df_test = train_test_split(
+    df,
+    test_size=0.2,      # 20% pour le test
+    random_state=42,    
+    shuffle=True
+)
 
-print(df_train.head(10))
-print("")
-print("")
-print("")
+
+# Entrainement du modele 
 
 print("TRAIN")
-reseau_de_neurones = MLP(hidden_sizes=(64,64))
+model = train_embedding_model(df_train, nom_sauvegarde="toto")
 
-train_and_add_generated_sentiment(df_train, reseau_de_neurones)
 
-cols = ["ticker", "sentiment", "generated_sentiment"]
-print(df_train[cols].head(10).to_string())
-print("")
-print("")
-print("")
+# Utilisation du modele 
 
 print("TEST")
-df_test = add_message_embedding(df, excluded_df=df_train, taille_max = 10000, regenerer=False)
-df_test, err = inference_and_add_generated_sentiment(df_test, reseau_de_neurones)
+df_test, err = add_generated_sentiment(df_test, model)
 
+cols = ["ticker", "sentiment", "generated_sentiment"]
 print(df_test[cols].head(10).to_string())
-
 print(err)
+
+
+# petit essai pour voir si la sauvegarde fonctionne :
+#model.save()
+#model = load_model("toto")
+#df_test, err = add_generated_sentiment(df_train, model)
+#print(df_test[cols].head(10).to_string())
+#print(err)
