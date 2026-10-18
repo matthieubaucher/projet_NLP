@@ -74,6 +74,12 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FI
 
     return df
 
+def create_dataset(df):
+    X_train = df["message"].astype(str).to_list()
+    Y_train = df["sentiment"].astype(str).map({"BAISSE": 0, "HAUSSE": 1}).to_numpy().astype(int)
+    train = list(zip(X_train, Y_train))
+    return train
+
 # Equilibre le df dataframe pour qu'il y ait autant de hausses que de baisses et pas de unknown
 # IN : un df avec des sentiments
 # OUT : le df purgé de ses UNKNOWN et d'une partie des HAUSSE ou de ses BAISSE suivant qui était en excés
@@ -102,27 +108,22 @@ def equilibre_HAUSSE_BAISSE(df):
 #  - model_name : le nom du modèle à embedding à utiliser et à entrainer. 
 #  - df : le dataframe pour s'entrainer (tout est utilisé)
 #
-def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier"):
+def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier", df_validation=None):
     
     # Préparation du train
     df_train = equilibre_HAUSSE_BAISSE(df)
-
-    X_train = df_train["message"].astype(str).to_list()
-    Y_train = df_train["sentiment"].astype(str).map({"BAISSE": 0, "HAUSSE": 1}).to_numpy().astype(int)
-    train = list(zip(X_train, Y_train))
+    df_val = equilibre_HAUSSE_BAISSE(df_validation)
+    train = create_dataset(df_train)
+    validation = create_dataset(df_val)
     
     print(f"Nombre d'éléments pour l'entrainement = {len(df_train)}")
 
     # Création du modèle
     model = EmbeddingClassifier(model_name, nom_sauvegarde).cuda()
 
-    # Entrainement
-    model.entraine(train, epochs=5, epochfinetune=8, lr=8e-5)
-    model.entraine(train, epochs=0, epochfinetune=6, lr=5e-5)
-    model.entraine(train, epochs=0, epochfinetune=4, lr=2.5e-5)
-    model.entraine(train, epochs=0, epochfinetune=3, lr=1e-5)
-    model.entraine(train, epochs=0, epochfinetune=2, lr=5e-6)
-    model.entraine(train, epochs=0, epochfinetune=2, lr=1e-6)
+    # Entrainement (ne surtout pas prendre plus de 3 époques, ca sur-apprend sinon)
+    model.entraine(train, epochs=1, epochfinetune=1, lr=8e-5, trainset_validation=validation)
+    model.entraine(train, epochs=0, epochfinetune=2, lr=5e-5, trainset_validation=validation)
 
     return model
 

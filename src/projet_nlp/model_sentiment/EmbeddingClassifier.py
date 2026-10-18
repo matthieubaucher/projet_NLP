@@ -31,9 +31,10 @@ class EmbeddingClassifier(nn.Module):
         cls = out.last_hidden_state[:, 0, :]
         return self.classifier(cls)
 
-    def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5):
+    def tokenize(self, trainset):
+        if trainset is None:
+            return None
 
-        # refaire le trainset avec des tokens cette fois
         sentences = []
         labels = []
 
@@ -62,6 +63,14 @@ class EmbeddingClassifier(nn.Module):
             for i in range(len(labels))
         ]
 
+        return trainset
+
+
+    def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5, trainset_validation=None):
+
+        # refaire le trainset avec des tokens cette fois
+        trainset = self.tokenize(trainset)
+        trainset_validation = self.tokenize(trainset_validation)
 
         dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
         criterion = nn.CrossEntropyLoss(reduction="none") # loss par élément
@@ -70,9 +79,8 @@ class EmbeddingClassifier(nn.Module):
         for param in self.encoder.parameters():
             param.requires_grad = finetune
 
-        self.train()
-
         for epoch in range(epochs):
+            self.train()
             elapse = time.time()
             total_loss = 0
             for sentences, labels in dataloader:
@@ -82,20 +90,34 @@ class EmbeddingClassifier(nn.Module):
                     losses = criterion(outputs, labels)  
                     #losses = torch.clamp(losses, max=20.0)                  # clamp individuel
                     loss = losses.mean()                                   # moyenne finale
-
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-
                 total_loss += loss.item()
 
             elapse = time.time() - elapse
-            print(f"Epoch {epoch+1}/{epochs} - Loss: {total_loss:.4f} - Elapse: {elapse}")
+            score = 0
+            if trainset_validation is not None:
+                score = self.test(trainset_validation)
 
-    def entraine(self, trainset, epochs, epochfinetune, lr=1e-5):
+            print(f"Epoch {epoch+1}/{epochs} - Loss: {total_loss:.4f} - score: {score:.2f} - Elapse: {elapse:.1f}")
+
+    def entraine(self, trainset, epochs, epochfinetune, lr=1e-5, trainset_validation=None):
         if epochs>0:
-            self.fit(trainset, finetune=False, epochs=epochs, lr=lr)
-        self.fit(trainset, finetune=True, epochs=epochfinetune, lr=lr)       
+            self.fit(trainset, finetune=False, epochs=epochs, lr=lr, trainset_validation=None)
+        self.fit(trainset, finetune=True, epochs=epochfinetune, lr=lr, trainset_validation=trainset_validation)       
+
+    def test(self, validationset_tokenized):
+        self.eval()
+        dataloader = DataLoader(validationset_tokenized, batch_size=128, shuffle=True)
+        with torch.no_grad():
+            ok = 0
+            for sentences, labels in dataloader:
+                labels_vrai = labels.to("cpu")
+                probas = self(sentences)
+                labels_predit = torch.argmax(probas, dim=1).cpu().numpy()
+                ok += (labels_predit == labels_vrai).sum()
+            return 100 * ok / len(validationset_tokenized)
 
     def predict(self, sentences):
         tokens = self.tokenizer(sentences, padding=True, truncation=True, return_tensors="pt", max_length=512).to("cuda") 
