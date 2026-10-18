@@ -74,6 +74,24 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FI
 
     return df
 
+# Equilibre le df dataframe pour qu'il y ait autant de hausses que de baisses et pas de unknown
+# IN : un df avec des sentiments
+# OUT : le df purgé de ses UNKNOWN et d'une partie des HAUSSE ou de ses BAISSE suivant qui était en excés
+def equilibre_HAUSSE_BAISSE(df):
+    df = df[df["sentiment"]!="UNKNOWN"]
+    count_baisse = (df["sentiment"]=="BAISSE").sum()
+    count_hausse = (df["sentiment"]=="HAUSSE").sum()
+    if count_baisse == count_hausse:
+        return df
+    df_baisse = df[df["sentiment"] == "BAISSE"]
+    df_hausse = df[df["sentiment"] == "HAUSSE"]
+    if count_baisse<count_hausse:
+        df_hausse_balanced = df_hausse.sample(len(df_baisse), random_state=42)
+        df = pd.concat([df_baisse, df_hausse_balanced]).sample(frac=1, random_state=42)
+    else:
+        df_baisse_balanced = df_baisse.sample(len(df_hausse), random_state=42)
+        df = pd.concat([df_hausse, df_baisse_balanced]).sample(frac=1, random_state=42)
+    return df
 
 # Entraine un modèle à embeddings sur les sentiments
 # Nécessite que au moins certaines lignes soient déjà annotée avec des sentiments pour servir à l'entrainement
@@ -87,16 +105,7 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FI
 def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier"):
     
     # Préparation du train
-    df_train = df[df["sentiment"]!="UNKNOWN"]
-
-    # On prend autant de HAUSSE que de BAISSE
-    count_baisse = (df["sentiment"]=="BAISSE").sum()
-    count_hausse = (df["sentiment"]=="HAUSSE").sum()
-    if count_baisse<count_hausse:
-        df_baisse = df[df["sentiment"] == "BAISSE"]
-        df_hausse = df[df["sentiment"] == "HAUSSE"]
-        df_hausse_balanced = df_hausse.sample(len(df_baisse), random_state=42)
-        df_train = pd.concat([df_baisse, df_hausse_balanced]).sample(frac=1, random_state=42)
+    df_train = equilibre_HAUSSE_BAISSE(df)
 
     X_train = df_train["message"].astype(str).to_list()
     Y_train = df_train["sentiment"].astype(str).map({"BAISSE": 0, "HAUSSE": 1}).to_numpy().astype(int)
@@ -107,10 +116,13 @@ def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier")
     # Création du modèle
     model = EmbeddingClassifier(model_name, nom_sauvegarde).cuda()
 
-    # Entrainement (25 minutes environ)
-    model.entraine(train, epochs=5, epochfinetune=4, lr=1e-4)
-    model.entraine(train, epochs=0, epochfinetune=5, lr=5e-5)
-    model.entraine(train, epochs=0, epochfinetune=3, lr=25e-5)
+    # Entrainement
+    model.entraine(train, epochs=5, epochfinetune=8, lr=8e-5)
+    model.entraine(train, epochs=0, epochfinetune=6, lr=5e-5)
+    model.entraine(train, epochs=0, epochfinetune=4, lr=2.5e-5)
+    model.entraine(train, epochs=0, epochfinetune=3, lr=1e-5)
+    model.entraine(train, epochs=0, epochfinetune=2, lr=5e-6)
+    model.entraine(train, epochs=0, epochfinetune=2, lr=1e-6)
 
     return model
 

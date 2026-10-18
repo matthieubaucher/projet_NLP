@@ -14,7 +14,7 @@ print("")
 
 # Création des dataset de train et de test
 
-df = df.sample(n=10000, random_state=42)
+df = df.sample(n=100000, random_state=42)
 df_train, df_test = train_test_split(
     df,
     test_size=0.2,      # 20% pour le test
@@ -26,7 +26,7 @@ df_train, df_test = train_test_split(
 # Entrainement du modele 
 
 print("TRAIN")
-model = train_embedding_model(df_train, nom_sauvegarde="toto")
+model = train_embedding_model(df_train, nom_sauvegarde="toto4")
 
 
 # Utilisation du modele 
@@ -39,9 +39,12 @@ print(df_test[cols].head(10).to_string())
 print(err)
 
 
+
+
+
 # petit essai pour voir si la sauvegarde fonctionne :
-#model.save()
-#model = load_model("toto")
-#df_test, err = add_generated_sentiment(df_train, model)
-#print(df_test[cols].head(10).to_string())
-#print(err)
+model.save()
+model = load_model("toto4")
+df_test, err = add_generated_sentiment(df_train, model)
+print(df_test[cols].head(10).to_string())
+print(err) # on peut voir si le résultat est meilleur sur la donnée d'entrainement (surapprentissage)

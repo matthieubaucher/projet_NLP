@@ -19,20 +19,50 @@ class EmbeddingClassifier(nn.Module):
 
         # On créé la tête de classification
         self.classifier = nn.Sequential(
-            nn.Linear(self.encoder.config.hidden_size, 256),
-            nn.Tanh(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 2),
+            nn.Linear(self.encoder.config.hidden_size, 2) #256),
+            #nn.Tanh(),
+            #nn.Dropout(0.2),
+            #nn.Linear(256, 2),
             #nn.Softmax(dim=-1)
         )
 
-    def forward(self, sentences):
-        enc = self.tokenizer(sentences, padding=True, truncation=True, return_tensors="pt", max_length=256).to("cuda")
-        out = self.encoder(**enc)
+    def forward(self, tokens):
+        out = self.encoder(**tokens)
         cls = out.last_hidden_state[:, 0, :]
         return self.classifier(cls)
 
-    def fit(self, trainset, finetune= True, epochs=5, batch_size=256, lr=1e-5):
+    def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5):
+
+        # refaire le trainset avec des tokens cette fois
+        sentences = []
+        labels = []
+
+        for sentence, label in trainset:
+            sentences.append(sentence)
+            labels.append(label)
+
+        # Tokenisation en une seule fois
+        enc = self.tokenizer(
+            sentences,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=256
+        ).to("cuda")
+
+        # Reconstruction du dataset tokenisé
+        trainset = [
+            (
+                {
+                    "input_ids": enc["input_ids"][i],
+                    "attention_mask": enc["attention_mask"][i]
+                },
+                labels[i]
+            )
+            for i in range(len(labels))
+        ]
+
+
         dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
         criterion = nn.CrossEntropyLoss(reduction="none") # loss par élément
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
@@ -50,7 +80,7 @@ class EmbeddingClassifier(nn.Module):
                 with torch.amp.autocast("cuda"):
                     outputs = self(sentences)
                     losses = criterion(outputs, labels)  
-                    losses = torch.clamp(losses, max=6.0)                  # clamp individuel
+                    #losses = torch.clamp(losses, max=20.0)                  # clamp individuel
                     loss = losses.mean()                                   # moyenne finale
 
                 optimizer.zero_grad()
@@ -68,9 +98,10 @@ class EmbeddingClassifier(nn.Module):
         self.fit(trainset, finetune=True, epochs=epochfinetune, lr=lr)       
 
     def predict(self, sentences):
+        tokens = self.tokenizer(sentences, padding=True, truncation=True, return_tensors="pt", max_length=512).to("cuda") 
         self.eval()
         with torch.no_grad():
-            probas = self(sentences)
+            probas = self(tokens)
             labels = torch.argmax(probas, dim=1).cpu().numpy()
             mapping = np.array(["BAISSE", "HAUSSE"])
             sentiments = mapping[labels]
