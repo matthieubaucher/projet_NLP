@@ -8,7 +8,7 @@ import os
 
 # Réseau de neurone entrainable. prend un modèle Sentence->Embedding et rajoute une tête de classification
 class EmbeddingClassifier(nn.Module):
-    def __init__(self, model_name="yiyanghkust/finbert-tone", nom_sauvegarde = "finbert-tone"):
+    def __init__(self, model_name, nom_sauvegarde):
         super().__init__()
 
         self.nom_sauvegarde = nom_sauvegarde
@@ -127,16 +127,21 @@ class EmbeddingClassifier(nn.Module):
             labels = torch.argmax(probas, dim=1).cpu().numpy()
             mapping = np.array(["BAISSE", "HAUSSE"])
             sentiments = mapping[labels]
+            # Nettoyage GPU
+            del tokens
+            del probas
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
             return sentiments
 
     def save(self):
-        torch.save(self.state_dict(), f"{self.nom_sauvegarde}.pt")
+        torch.save(self.state_dict(), f"{self.nom_sauvegarde}")
 
-def load_model(nom_sauvegarde = "finbert-tone"):
-    filename = f"{nom_sauvegarde}.pt"
+def load_model(nom_sauvegarde, model_name):
+    filename = f"{nom_sauvegarde}"
     if not os.path.exists(filename):
         return None
-    model = EmbeddingClassifier()
+    model = EmbeddingClassifier(nom_sauvegarde=nom_sauvegarde, model_name=model_name)
     model.load_state_dict(torch.load(filename))
     model.to("cuda")
     model.eval()   

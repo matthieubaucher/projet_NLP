@@ -6,6 +6,8 @@ from tqdm import tqdm
 import pyarrow as pa
 import pyarrow.parquet as pq
 from projet_nlp.model_sentiment.EmbeddingClassifier import EmbeddingClassifier
+from sklearn.model_selection import train_test_split
+from projet_nlp.model_sentiment.EmbeddingClassifier import load_model
 
 
 # Pour de l'embedding
@@ -14,6 +16,7 @@ FINBERT_TONE = "yiyanghkust/finbert-tone" # SOTA pour embeddings financiers
 ROBERTA = "cardiffnlp/twitter-roberta-base" # compromis vitesse/qualité
 
 
+# PRIVATE
 def encode_in_batches(texts, model_name, batch_size=2048):
     model = SentenceTransformer(model_name, device="cuda")
     embeddings = []
@@ -23,7 +26,7 @@ def encode_in_batches(texts, model_name, batch_size=2048):
         embeddings.append(emb.cpu())  # on sort du GPU pour éviter la saturation
     return torch.cat(embeddings, dim=0)
 
-
+# PUBLIC
 # Ajoute une colonne embedding au df (mais pas inPlace) calculé à partir du modèle demandé
 # Sauvegarde le résultat. si le calcul a déjà été fait pour ce model_name et cette taille_max et les symboles du modèle
 # alors on retoune la précédente sauvegarde sans faire de calculs.
@@ -74,12 +77,14 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FI
 
     return df
 
+# PRIVATE
 def create_dataset(df):
     X_train = df["message"].astype(str).to_list()
     Y_train = df["sentiment"].astype(str).map({"BAISSE": 0, "HAUSSE": 1}).to_numpy().astype(int)
     train = list(zip(X_train, Y_train))
     return train
 
+# PUBLIC
 # Equilibre le df dataframe pour qu'il y ait autant de hausses que de baisses et pas de unknown
 # IN : un df avec des sentiments
 # OUT : le df purgé de ses UNKNOWN et d'une partie des HAUSSE ou de ses BAISSE suivant qui était en excés
@@ -99,6 +104,7 @@ def equilibre_HAUSSE_BAISSE(df):
         df = pd.concat([df_hausse, df_baisse_balanced]).sample(frac=1, random_state=42)
     return df
 
+# PRIVATE
 # Entraine un modèle à embeddings sur les sentiments
 # Nécessite que au moins certaines lignes soient déjà annotée avec des sentiments pour servir à l'entrainement
 #
@@ -122,16 +128,18 @@ def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier",
     model = EmbeddingClassifier(model_name, nom_sauvegarde).cuda()
 
     # Entrainement (ne surtout pas prendre plus de 3 époques, ca sur-apprend sinon)
-    model.entraine(train, epochs=1, epochfinetune=1, lr=8e-5, trainset_validation=validation)
-    model.entraine(train, epochs=0, epochfinetune=2, lr=5e-5, trainset_validation=validation)
+    model.fit(train, epochs=1, lr=5e-5, trainset_validation=validation)
+    model.fit(train, epochs=1, lr=2e-5, trainset_validation=validation)
+    model.fit(train, epochs=1, lr=1e-5, trainset_validation=validation)
 
     return model
 
 
+# PRIVATE
 # Utilise un modèle entrainé pour rajouter une colonne generated_sentiment
 # IN : le modèle et le dataframe à décorer
 # OUT : le dataframe (qui a aussi été modifier inplace), et le score de précision
-def add_generated_sentiment(df, model, batch_size=512):
+def add_generated_sentiment(df, model, batch_size=256):
     print("Inférence")
 
     sentences = df["message"].astype(str).to_list()
@@ -149,3 +157,51 @@ def add_generated_sentiment(df, model, batch_size=512):
     score = 100 * ok / nb
 
     return df, score
+
+
+# PUBLIC
+# Ajoute une colonne generated_sentiment au df (mais pas inPlace) calculé à partir du modèle demandé
+# Entraine le modèle si pas déjà fait et le sauvegarde. si le modèle existe déjà alors le charge et l'utilise sans le réentrainer
+# 
+# OUT :
+#  - un dataframe avec une colonne generated_sentiment en plus
+#  - le modele entrainé
+#
+# IN :
+#  - df : le dataframe de départ (sans generated_sentiment)
+#  - regenerer : si oui alors on recalcule le modèle avant même s'il existait (et on l'écrase ensuite)
+#  - model_name : nom du modèle à utiliser. ex : FINBERT_TONE, ROBERTA, ...
+#  - taille_max : nombre de tweet d'entrainement du modèle, attention : fait partie du nom de la sauvegarde pour save et load
+#  - test : si c'est juste pour du test pour remplir le dataframe
+#
+def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA, taille_max = 400000):
+    fn = "grosse-berta"
+    nom_sauvegarde = f"toto_{fn}{taille_max}.pt"
+
+    df_train = df.sample(n=taille_max, random_state=42)
+    df_train, df_test = train_test_split(
+        df_train,
+        test_size=0.2,      # 20% pour le test
+        random_state=42,    
+        shuffle=True
+    )
+    df_test, df_validation = train_test_split(
+        df_test,
+        test_size=0.2,      # 20% pour la validation inter époque
+        random_state=42,    
+        shuffle=True
+    )
+
+    if os.path.exists(nom_sauvegarde) and not regenerer:   
+        print(f"=== Modèle déjà existant : {nom_sauvegarde} ===")
+        model = load_model(nom_sauvegarde, model_name)
+    else:
+        print("TRAIN")
+
+        model = train_embedding_model(df_train, nom_sauvegarde=nom_sauvegarde, df_validation=df_validation, model_name=model_name)
+        model.save()
+
+    df_test, score = add_generated_sentiment(df_test, model)
+    print(f"L'annotation a été effectué avec une précision de {score}")
+
+    return df_test, model
