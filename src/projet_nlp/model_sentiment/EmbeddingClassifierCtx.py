@@ -25,7 +25,7 @@ class EmbeddingClassifierCtx(nn.Module):
             nn.Tanh()
         )
         self.classifier = nn.Sequential(
-                    nn.Linear(self.encoder.config.hidden_size+N, 128) #256),
+                    nn.Linear(self.encoder.config.hidden_size+N, 128), 
                     nn.Tanh(),
                     #nn.Dropout(0.2),
                     nn.Linear(128, 2)
