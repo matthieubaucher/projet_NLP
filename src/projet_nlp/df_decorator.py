@@ -5,6 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 import pyarrow as pa
 import pyarrow.parquet as pq
+import numpy as np
 from projet_nlp.model_sentiment.EmbeddingClassifier import EmbeddingClassifier
 from sklearn.model_selection import train_test_split
 from projet_nlp.model_sentiment.EmbeddingClassifier import load_model
@@ -27,7 +28,7 @@ def encode_in_batches(texts, model_name, batch_size=2048):
     return torch.cat(embeddings, dim=0)
 
 # PUBLIC
-# Ajoute une colonne embedding au df (mais pas inPlace) calculé à partir du modèle demandé
+# Ajoute une colonne msg_embedding au df (mais pas inPlace) calculé à partir du modèle demandé
 # Sauvegarde le résultat. si le calcul a déjà été fait pour ce model_name et cette taille_max et les symboles du modèle
 # alors on retoune la précédente sauvegarde sans faire de calculs.
 # 
@@ -67,15 +68,68 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FI
     # Conversion en table Arrow
     table = pa.Table.from_pandas(df, preserve_index=False)
 
-    # Écriture par chunks
     pq.write_table(
         table,
         filename,
-        compression="zstd",      # tu peux mettre snappy si tu veux
-        chunk_size=100_000       # ici le chunk est réellement utilisé
+        compression="zstd",      
+        chunk_size=100_000      
     )
 
     return df
+
+
+# PUBLIC
+# Ajoute une colonne user_embedding au df (mais pas inPlace) calculé à partir du modèle demandé
+# Sauvegarde le résultat. si le calcul a déjà été fait pour ce model_name et cette taille_max et les symboles du modèle
+# alors on retoune la précédente sauvegarde sans faire de calculs.
+# 
+# OUT :
+#  - un dataframe de taille "taille_max" ou aussi grand que le précédent si taille_max=0, et contenant en plus
+#    les user_embedding
+#
+# IN :
+#  - df : le dataframe de départ
+#  - regenerer : si oui alors on refait le calcul et on écrase la sauvegarde
+#  - model_name : nom du modèle à utiliser. ex : FINBERT_TONE, MINI_LM, MPNET, ROBERTA, FINBERT
+#  - taille_max : pioche ce nombre d'élément au hasard dans df
+#
+def add_user_embedding(df, regenerer=False ,model_name=FINBERT_TONE, taille_max = 0):
+    tickers = sorted(df["ticker"].unique())
+    tickers_name = "".join(f"_{t}" for t in tickers)
+    filename = f"df_with_user_embeddings{tickers_name}_{model_name.replace("/","_")}_{taille_max}.parquet"
+
+    # Ne pas refaire le calcul si déjà fait
+    if os.path.exists(filename) and not regenerer:
+        print(f"=== Fichier déjà existant : {filename} ===")
+        return pd.read_parquet(filename)
+
+    # Récupération des msg_embedding (nécessaire pour pouvoir construire le user_embedding)
+    df_msg_embedding = add_message_embedding(df, excluded_df = None, regenerer=regenerer ,model_name=model_name, taille_max = taille_max)
+
+    # Fabrication du user embedding : il est la moyenne de ses messages du passé
+    df_msg_embedding["user_embedding"] = None
+    previous_user_id = None
+    for idx, row in enumerate(df_msg_embedding.itertuples()):
+        user_id = row.user_id
+        msg_embedding = row.msg_embedding
+        if user_id!=previous_user_id:
+            user_emb = np.zeros_like(msg_embedding)           
+            nb = 0
+            previous_user_id = user_id
+        user_emb += msg_embedding
+        nb += 1
+        df_msg_embedding.loc[idx, "user_embedding"] = user_emb / nb   
+
+    # Sauvegarde
+    table = pa.Table.from_pandas(df_msg_embedding, preserve_index=False)
+    pq.write_table(
+        table,
+        filename,
+        compression="zstd",      
+        chunk_size=100_000      
+    )
+    return df
+
 
 # PRIVATE
 def create_dataset(df):

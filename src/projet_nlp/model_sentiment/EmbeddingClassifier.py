@@ -69,12 +69,8 @@ class EmbeddingClassifier(nn.Module):
     def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5, trainset_validation=None):
 
         # refaire le trainset avec des tokens cette fois
-        print("tokenise trainset")
         trainset = self.tokenize(trainset)
-        print("ok")
-        print("tokenise trainset_validation")
         trainset_validation = self.tokenize(trainset_validation)
-        print("ok")
 
         dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
         criterion = nn.CrossEntropyLoss(reduction="none") # loss par élément
