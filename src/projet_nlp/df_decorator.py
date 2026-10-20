@@ -172,9 +172,9 @@ def add_generated_sentiment(df, model, batch_size=256):
 #  - regenerer : si oui alors on recalcule le modèle avant même s'il existait (et on l'écrase ensuite)
 #  - model_name : nom du modèle à utiliser. ex : FINBERT_TONE, ROBERTA, ...
 #  - taille_max : nombre de tweet d'entrainement du modèle, attention : fait partie du nom de la sauvegarde pour save et load
-#  - test : si c'est juste pour du test pour remplir le dataframe
+#  - test : si c'est juste pour du test ou pour remplir la totalite du dataframe
 #
-def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA, taille_max = 400000):
+def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA, taille_max = 400000, test=True):
     fn = "grosse-berta"
     nom_sauvegarde = f"toto_{fn}{taille_max}.pt"
 
@@ -201,7 +201,12 @@ def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA, taille_max = 
         model = train_embedding_model(df_train, nom_sauvegarde=nom_sauvegarde, df_validation=df_validation, model_name=model_name)
         model.save()
 
-    df_test, score = add_generated_sentiment(df_test, model)
+    if test:
+        selection = df_test
+    else:
+        selection = df
+
+    resultat, score = add_generated_sentiment(selection, model)
     print(f"L'annotation a été effectué avec une précision de {score}")
 
-    return df_test, model
+    return resultat, model

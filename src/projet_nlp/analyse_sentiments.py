@@ -13,9 +13,9 @@ print("")
 
 
 
-#ROBERTA :      1_000 ->  ?%  10_000 -> 70%  100_000 -> 76%   400_000 -> 80%  1_000_000 -> ?
+#ROBERTA :      1_000 -> 53%  10_000 -> 70%  100_000 -> 76%   400_000 -> 80%  1_000_000 -> ?
 #FINBERT-TONE : 1_000 -> 63%  10_000 -> 62%  100_000 -> 72%   400_000 -> 77%  1_000_000 -> ?
-df = add_message_sentiment(df, regenerer=False , model_name=ROBERTA, taille_max = 100000)
+df, model = add_message_sentiment(df, regenerer=False , model_name=ROBERTA, taille_max = 1000000)
 print(df.head())
 print("")
 
