@@ -16,6 +16,7 @@ class EmbeddingClassifier(nn.Module):
         # On récupère le transformer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, clean_up_tokenization_spaces=True)
         self.encoder = AutoModel.from_pretrained(model_name)
+        #self.encoder.gradient_checkpointing_enable()
 
         # On créé la tête de classification
         self.classifier = nn.Sequential(
@@ -27,11 +28,12 @@ class EmbeddingClassifier(nn.Module):
         )
 
     def forward(self, tokens):
+        #tokens = {k: v.to("cuda", non_blocking=True) for k, v in tokens.items()}
         out = self.encoder(**tokens)
         cls = out.last_hidden_state[:, 0, :]
         return self.classifier(cls)
 
-    def tokenize(self, trainset):
+    def tokenize(self, trainset, token_size_max = 256):
         if trainset is None:
             return None
 
@@ -48,8 +50,14 @@ class EmbeddingClassifier(nn.Module):
             padding=True,
             truncation=True,
             return_tensors="pt",
-            max_length=512
+            max_length=token_size_max
         ).to("cuda")
+
+        # 1. labels numpy -> tensor CPU
+        labels = torch.tensor(labels, dtype=torch.long)
+
+        # 2. labels CPU -> GPU (une seule fois)
+        labels = labels.to("cuda")
 
         # Reconstruction du dataset tokenisé
         trainset = [
@@ -58,49 +66,59 @@ class EmbeddingClassifier(nn.Module):
                     "input_ids": enc["input_ids"][i],
                     "attention_mask": enc["attention_mask"][i]
                 },
-                labels[i]
+               labels[i]
             )
             for i in range(len(labels))
         ]
 
+
         return trainset
 
 
-    def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5, trainset_validation=None):
+    def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5, trainset_validation=None, token_size_max = 256):
 
         # refaire le trainset avec des tokens cette fois
-        trainset = self.tokenize(trainset)
-        trainset_validation = self.tokenize(trainset_validation)
+        trainset = self.tokenize(trainset, token_size_max=token_size_max)
+        trainset_validation = self.tokenize(trainset_validation, token_size_max=token_size_max)
 
-        dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
+        #dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=False)
         criterion = nn.CrossEntropyLoss(reduction="none") # loss par élément
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
         for param in self.encoder.parameters():
             param.requires_grad = finetune
-
+        
         for epoch in range(epochs):
             self.train()
             elapse = time.time()
             total_loss = 0
-            for sentences, labels in dataloader:
-                labels = labels.to("cuda")
-                with torch.amp.autocast("cuda"):
+
+            for i in range(0, len(trainset), batch_size):
+                batch = trainset[i:i+batch_size]
+                sentences = {
+                    "input_ids": torch.stack([item[0]["input_ids"] for item in batch]),
+                    "attention_mask": torch.stack([item[0]["attention_mask"] for item in batch])
+                }
+                labels = torch.stack([item[1] for item in batch])
+
+                with torch.amp.autocast("cuda"): 
                     outputs = self(sentences)
                     losses = criterion(outputs, labels)  
-                    #losses = torch.clamp(losses, max=20.0)                  # clamp individuel
-                    loss = losses.mean()                                   # moyenne finale
+                    #losses = torch.clamp(losses, max=20.0)         
+                    loss = losses.mean()                                 
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                total_loss += loss.item()
+                
+                total_loss += loss.detach()
 
             elapse = time.time() - elapse
             score = 0
             if trainset_validation is not None:
                 score = self.test(trainset_validation)
 
-            print(f"Epoch {epoch+1}/{epochs} - Loss: {total_loss:.4f} - score: {score:.2f} - Elapse: {elapse:.1f}")
+            print(f"Epoch {epoch+1}/{epochs} - Loss: {(total_loss.cpu().item()):.4f} - score: {score:.2f} - Elapse: {elapse:.1f}")
 
     def entraine(self, trainset, epochs, epochfinetune, lr=1e-5, trainset_validation=None):
         if epochs>0:
@@ -123,15 +141,15 @@ class EmbeddingClassifier(nn.Module):
         tokens = self.tokenizer(sentences, padding=True, truncation=True, return_tensors="pt", max_length=512).to("cuda") 
         self.eval()
         with torch.no_grad():
+            # Nettoyage GPU
+            torch.cuda.empty_cache()
+            #torch.cuda.synchronize()
             probas = self(tokens)
             labels = torch.argmax(probas, dim=1).cpu().numpy()
             mapping = np.array(["BAISSE", "HAUSSE"])
             sentiments = mapping[labels]
-            # Nettoyage GPU
             del tokens
             del probas
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
             return sentiments
 
     def save(self):

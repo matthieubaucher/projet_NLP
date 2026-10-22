@@ -13,9 +13,14 @@ from projet_nlp.model_sentiment.EmbeddingClassifier import load_model
 
 # Pour de l'embedding
 
+MPNET= "microsoft/mpnet-base" # Tweets, finance, messages moyens (vitesse moyenne)
+ALBERT = "albert-large-v2" # Messages moyens (gros modele, tres lent)
 FINBERT_TONE = "yiyanghkust/finbert-tone" # SOTA pour embeddings financiers
 ROBERTA = "cardiffnlp/twitter-roberta-base" # compromis vitesse/qualité
-
+ROBERTA_S = "cardiffnlp/twitter-roberta-base-sentiment" # Tweets sentiment                           <- winner
+MINI_BERTA = "distilroberta-base" # Tweets, sentiment (vitesse plutot bonne)
+GOOGLE = "google/electra-small-discriminator" # Gros datasets, tweets (rapide)
+GROS_GOOGLE = "google/electra-base-discriminator" # Sentiment, finance (2x plus lent, comme MPNET)
 
 # PRIVATE
 def encode_in_batches(texts, model_name, batch_size=2048):
@@ -93,7 +98,7 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FI
 #  - model_name : nom du modèle à utiliser. ex : FINBERT_TONE, MINI_LM, MPNET, ROBERTA, FINBERT
 #  - taille_max : pioche ce nombre d'élément au hasard dans df
 #
-def add_user_embedding(df, regenerer=False ,model_name=FINBERT_TONE, taille_max = 0):
+def add_user_embedding(df, regenerer=False ,model_name=ROBERTA_S, taille_max = 0):
     tickers = sorted(df["ticker"].unique())
     tickers_name = "".join(f"_{t}" for t in tickers)
     filename = f"df_with_user_embeddings{tickers_name}_{model_name.replace("/","_")}_{taille_max}.parquet"
@@ -138,6 +143,32 @@ def create_dataset(df):
     train = list(zip(X_train, Y_train))
     return train
 
+# PRIVATE
+def split_size(train):
+    train32 = []
+    train64 = []
+    train128 = []
+    train256 = []
+    train512 = []
+
+    for text, label in train:
+        n_words = len(text.split())
+
+        if n_words <= 32:
+            train32.append((text, label))
+        elif n_words <= 64:
+            train64.append((text, label))
+        elif n_words <= 128:
+            train128.append((text, label))
+        elif n_words <= 256:
+            train256.append((text, label))
+        else:
+            train512.append((text, label))
+
+    return train32, train64, train128, train256, train512
+
+
+
 # PUBLIC
 # Equilibre le df dataframe pour qu'il y ait autant de hausses que de baisses et pas de unknown
 # IN : un df avec des sentiments
@@ -168,7 +199,7 @@ def equilibre_HAUSSE_BAISSE(df):
 #  - model_name : le nom du modèle à embedding à utiliser et à entrainer. 
 #  - df : le dataframe pour s'entrainer (tout est utilisé)
 #
-def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier", df_validation=None):
+def train_embedding_model(df, model_name=ROBERTA_S, nom_sauvegarde="dernier", df_validation=None):
     
     # Préparation du train
     df_train = equilibre_HAUSSE_BAISSE(df)
@@ -176,15 +207,49 @@ def train_embedding_model(df, model_name=FINBERT_TONE, nom_sauvegarde="dernier",
     train = create_dataset(df_train)
     validation = create_dataset(df_val)
     
+    train32, train64, train128, train256, train512 = split_size(train)
+    validation32, validation64, validation128, validation256, validation512 = split_size(validation)
+
+    
     print(f"Nombre d'éléments pour l'entrainement = {len(df_train)}")
 
     # Création du modèle
     model = EmbeddingClassifier(model_name, nom_sauvegarde).cuda()
 
     # Entrainement (ne surtout pas prendre plus de 3 époques, ca sur-apprend sinon)
-    model.fit(train, epochs=1, lr=5e-5, trainset_validation=validation)
-    model.fit(train, epochs=1, lr=2e-5, trainset_validation=validation)
-    model.fit(train, epochs=1, lr=1e-5, trainset_validation=validation)
+    # epoque 1
+    model.fit(train32, epochs=1, lr=4e-5, trainset_validation=validation32, token_size_max = 32)
+    model.fit(train64, epochs=1, lr=4e-5, trainset_validation=validation64, token_size_max = 64)
+    model.fit(train128, epochs=1, lr=4e-5, trainset_validation=validation128, token_size_max = 128)
+    if len(train256)>1:
+        if len(validation256)>100:
+            val = validation256
+        else: 
+            val = validation128
+        model.fit(train256, epochs=1, lr=4e-5, trainset_validation=val, token_size_max = 256)
+    if len(train512)>1:
+        if len(validation512)>100:
+            val = validation512
+        else: 
+            val = validation256
+        model.fit(train512, epochs=1, lr=4e-5, trainset_validation=val, token_size_max = 512)
+    # epoque 2        
+    model.fit(train32, epochs=1, lr=2e-5, trainset_validation=validation32, token_size_max = 32)
+    model.fit(train64, epochs=1, lr=2e-5, trainset_validation=validation64, token_size_max = 64)        
+    model.fit(train128, epochs=1, lr=2e-5, trainset_validation=validation128, token_size_max = 128)
+    if len(train256)>1:
+        if len(validation256)>100:
+            val = validation256
+        else: 
+            val = validation128
+        model.fit(train256, epochs=1, lr=2e-5, trainset_validation=val, token_size_max = 256)
+    if len(train512)>1:
+        if len(validation512)>100:
+            val = validation512
+        else: 
+            val = validation256
+        model.fit(train512, epochs=1, lr=2e-5, trainset_validation=val, token_size_max = 512)
+
 
     return model
 
@@ -228,20 +293,37 @@ def add_generated_sentiment(df, model, batch_size=256):
 #  - taille_max : nombre de tweet d'entrainement du modèle, attention : fait partie du nom de la sauvegarde pour save et load
 #  - test : si c'est juste pour du test ou pour remplir la totalite du dataframe
 #
-def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA, taille_max = 400000, test=True):
-    fn = "grosse-berta"
+def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA_S, taille_max = 400000, test=True):
+    if model_name==ROBERTA:
+        fn = "grosse-berta"
+    elif model_name==MINI_BERTA:
+        fn = "micro-berta"
+    elif model_name==MPNET:
+        fn = "mpnet"
+    elif model_name==FINBERT_TONE:
+        fn = "finbert"
+    elif model_name==ROBERTA_S:
+        fn = "petite-berta"
+    elif model_name==ALBERT:
+        fn = "albert"
+    elif model_name==GOOGLE:
+        fn = "petit-google"
+    elif model_name==GROS_GOOGLE:
+        fn = "gros-google"
+    else:
+        fn = "autre"
     nom_sauvegarde = f"toto_{fn}{taille_max}.pt"
 
     df_train = df.sample(n=taille_max, random_state=42)
     df_train, df_test = train_test_split(
         df_train,
-        test_size=0.2,      # 20% pour le test
+        test_size=0.05,      # 4% pour le test
         random_state=42,    
         shuffle=True
     )
     df_test, df_validation = train_test_split(
         df_test,
-        test_size=0.2,      # 20% pour la validation inter époque
+        test_size=0.2,       # 1% pour la validation inter époque
         random_state=42,    
         shuffle=True
     )
