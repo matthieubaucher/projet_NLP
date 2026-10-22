@@ -30,7 +30,7 @@ def get_df_for_sentiment_analysis(symbols):
 #
 def get_df_for_forecast_analysis(symbols, keep_wend_msg=True):
     df = clean_df(generate_dataframe(symbols, keep_wend_msg))
-    df.drop(columns=["message"], inplace=True)
+    #df.drop(columns=["message"], inplace=True)
     return df
 
 
