@@ -96,12 +96,11 @@ def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=RO
 #  - df : le dataframe de départ
 #  - regenerer : si oui alors on refait le calcul et on écrase la sauvegarde
 #  - model_name : nom du modèle à utiliser. ex : FINBERT_TONE, MINI_LM, MPNET, ROBERTA, FINBERT
-#  - taille_max : pioche ce nombre d'élément au hasard dans df
 #
-def add_user_embedding(df, regenerer=False ,model_name=ROBERTA_S, taille_max = 0):
+def add_user_embedding(df, regenerer=False ,model_name=ROBERTA_S):
     tickers = sorted(df["ticker"].unique())
     tickers_name = "".join(f"_{t}" for t in tickers)
-    filename = f"df_with_user_embeddings{tickers_name}_{model_name.replace("/","_")}_{taille_max}.parquet"
+    filename = f"df_with_user_embeddings{tickers_name}_{model_name.replace("/","_")}.parquet"
 
     # Ne pas refaire le calcul si déjà fait
     if os.path.exists(filename) and not regenerer:
@@ -109,7 +108,7 @@ def add_user_embedding(df, regenerer=False ,model_name=ROBERTA_S, taille_max = 0
         return pd.read_parquet(filename)
 
     # Récupération des msg_embedding (nécessaire pour pouvoir construire le user_embedding)
-    df_msg_embedding = add_message_embedding(df, excluded_df = None, regenerer=regenerer ,model_name=model_name, taille_max = taille_max)
+    df_msg_embedding = add_message_embedding(df, excluded_df = None, regenerer=True ,model_name=model_name, taille_max = 0)
 
     # Fabrication du user embedding : il est la moyenne de ses messages du passé
     df_msg_embedding["user_embedding"] = None
@@ -123,7 +122,7 @@ def add_user_embedding(df, regenerer=False ,model_name=ROBERTA_S, taille_max = 0
             previous_user_id = user_id
         user_emb += msg_embedding
         nb += 1
-        df_msg_embedding.loc[idx, "user_embedding"] = user_emb / nb   
+        df_msg_embedding.loc[idx, df_msg_embedding.columns.get_loc("user_embedding")] = (user_emb / nb).tolist()
 
     # Sauvegarde
     table = pa.Table.from_pandas(df_msg_embedding, preserve_index=False)

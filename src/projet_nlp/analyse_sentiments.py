@@ -1,5 +1,5 @@
 from projet_nlp.dataframe_generator import get_df_for_sentiment_analysis 
-from projet_nlp.df_decorator import train_embedding_model, add_generated_sentiment, MPNET, FINBERT_TONE, ROBERTA_S,GOOGLE, MINI_BERTA, ALBERT, GROS_GOOGLE, ROBERTA, add_message_sentiment
+from projet_nlp.df_decorator import train_embedding_model, add_generated_sentiment, add_user_embedding, MPNET, FINBERT_TONE, ROBERTA_S,GOOGLE, MINI_BERTA, ALBERT, GROS_GOOGLE, ROBERTA, add_message_sentiment
 from sklearn.model_selection import train_test_split
 from projet_nlp.model_sentiment.EmbeddingClassifier import load_model
 import pandas as pd
@@ -29,5 +29,11 @@ print(resultat.head())
 print("")
 
 
-rows = resultat[(resultat["sentiment"]!=resultat["generated_sentiment"]) & (resultat["sentiment"]!="UNKNOWN")].iloc[0:30]
-print(rows)
+#rows = resultat[(resultat["sentiment"]!=resultat["generated_sentiment"]) & (resultat["sentiment"]!="UNKNOWN")].iloc[0:6]
+#print(rows)
+
+
+petit = resultat.head(5)
+petit = add_user_embedding(petit, regenerer=False ,model_name=ROBERTA_S)
+
+print(petit)
