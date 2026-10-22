@@ -48,7 +48,7 @@ def encode_in_batches(texts, model_name, batch_size=2048):
 #  - taille_max : pioche ce nombre d'élément au hasard dans df
 #  - excluded_df : exclusion de toutes lignes de ce dataframe dans le df pris (utile pour exclure un train et générer un test)
 #
-def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=FINBERT_TONE, taille_max = 0):
+def add_message_embedding(df, excluded_df = None, regenerer=False ,model_name=ROBERTA_S, taille_max = 0):
     tickers = sorted(df["ticker"].unique())
     tickers_name = "".join(f"_{t}" for t in tickers)
     filename = f"df_with_msg_embeddings{tickers_name}_{model_name.replace("/","_")}_{taille_max}.parquet"
@@ -294,6 +294,11 @@ def add_generated_sentiment(df, model, batch_size=256):
 #  - test : si c'est juste pour du test ou pour remplir la totalite du dataframe
 #
 def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA_S, taille_max = 400000, test=True):
+    tickers = sorted(df["ticker"].unique())
+    tickers_name = "".join(f"_{t}" for t in tickers)
+    tickers_name += "_test" if test else ""
+    filename = f"df_with_generated_sentiment{tickers_name}_{model_name.replace("/","_")}_{taille_max}.parquet"
+
     if model_name==ROBERTA:
         fn = "grosse-berta"
     elif model_name==MINI_BERTA:
@@ -313,6 +318,11 @@ def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA_S, taille_max 
     else:
         fn = "autre"
     nom_sauvegarde = f"toto_{fn}{taille_max}.pt"
+
+    if os.path.exists(filename) and not regenerer:
+        print(f"=== Fichier déjà existant : {filename} ===")
+        model = load_model(nom_sauvegarde, model_name)
+        return pd.read_parquet(filename), model
 
     df_train = df.sample(n=taille_max, random_state=42)
     df_train, df_test = train_test_split(
@@ -344,5 +354,15 @@ def add_message_sentiment(df, regenerer=False ,model_name=ROBERTA_S, taille_max 
 
     resultat, score = add_generated_sentiment(selection, model)
     print(f"L'annotation a été effectué avec une précision de {score}")
+
+    # Conversion en table Arrow
+    table = pa.Table.from_pandas(selection, preserve_index=False)
+
+    pq.write_table(
+        table,
+        filename,
+        compression="zstd",      
+        chunk_size=100_000      
+    )
 
     return resultat, model
