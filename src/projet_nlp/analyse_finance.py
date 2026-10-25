@@ -14,9 +14,10 @@ print(df.head())
 print("")
 
 # Ajout des sentiments générés
-resultat, model = add_message_sentiment(df, regenerer=False , model_name=ROBERTA_S, taille_max = 2000000, test=False)
+resultat, model = add_message_sentiment(df, regenerer=False , model_name=ROBERTA_S, taille_max = 2000, test=True)
 resultat.drop(columns=["message"], inplace=True) # Pas besoin de cette colonne pour la finance
 petit = resultat.head(5)
 print(resultat.head())
 print("")
 
+resultat.to_csv("finance.csv", index=False)

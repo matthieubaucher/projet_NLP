@@ -17,7 +17,7 @@ class EmbeddingClassifierCtx(nn.Module):
         # On récupère le transformer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, clean_up_tokenization_spaces=True)
         self.encoder = AutoModel.from_pretrained(model_name)
-        self.user_encoder = copy.deepcopy(self.encoder.roberta.encoder.layer[-1]) # supprimer "roberta" pour finebertt-one
+        self.user_encoder = copy.deepcopy(self.encoder.encoder.layer[-1]) 
         # On créé les têtes de classification
         N = 2
         self.layer_user = nn.Sequential(
@@ -44,7 +44,7 @@ class EmbeddingClassifierCtx(nn.Module):
         user_hidden = self.user_encoder(
             user_embeddings,
             attention_mask=att
-        )[:, 0, :] 
+        )[0][:, 0, :] 
         # Réduction vers un espace latent qui généralise car plus petit
         resultat_user = self.layer_user(user_hidden)
 
@@ -54,15 +54,16 @@ class EmbeddingClassifierCtx(nn.Module):
         # Classification avec la tête 
         return self.classifier(final)
 
-    def tokenize(self, trainset):
+    def tokenize(self, trainset, token_size_max = 256):
         if trainset is None:
             return None
+        print("taille=",len(trainset))
 
         sentences = []
         labels = []
         user_embeddings = []
 
-        for sentence, label, user_embedding in trainset:
+        for sentence, user_embedding, label in trainset:
             sentences.append(sentence)
             labels.append(label)
             user_embeddings.append(user_embedding)
@@ -73,8 +74,22 @@ class EmbeddingClassifierCtx(nn.Module):
             padding=True,
             truncation=True,
             return_tensors="pt",
-            max_length=512
+            max_length=token_size_max
         ).to("cuda")
+
+        # 1. labels numpy -> tensor CPU
+        labels = torch.tensor(labels, dtype=torch.long)
+
+        # 2. labels CPU -> GPU (une seule fois)
+        labels = labels.to("cuda")
+
+        # 1. user_embeddings numpy -> tensor CPU
+        #user_embeddings = torch.tensor(user_embeddings, dtype=torch.float32)
+        user_embeddings = torch.from_numpy(np.array(user_embeddings, dtype=np.float32))
+
+
+        # 2. user_embeddings CPU -> GPU (une seule fois)
+        user_embeddings = user_embeddings.to("cuda")
 
         # Reconstruction du dataset tokenisé
         trainset = [
@@ -89,18 +104,19 @@ class EmbeddingClassifierCtx(nn.Module):
             for i in range(len(labels))
         ]
 
+
         return trainset
 
 
-    def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5, trainset_validation=None):
+    def fit(self, trainset, finetune= True, epochs=5, batch_size=64, lr=1e-5, trainset_validation=None, token_size_max = 256):
 
         # refaire le trainset avec des tokens cette fois
-        trainset = self.tokenize(trainset)
-        trainset_validation = self.tokenize(trainset_validation)
+        trainset = self.tokenize(trainset, token_size_max=token_size_max)
+        trainset_validation = self.tokenize(trainset_validation, token_size_max=token_size_max)
 
         dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
         criterion = nn.CrossEntropyLoss(reduction="none") # loss par élément
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=5e-7)
 
         for param in self.encoder.parameters():
             param.requires_grad = finetune
@@ -146,18 +162,23 @@ class EmbeddingClassifierCtx(nn.Module):
             return 100 * ok / len(validationset_tokenized)
 
     def predict(self, sentences, user_embeddings):
-        tokens = self.tokenizer(sentences, padding=True, truncation=True, return_tensors="pt", max_length=512).to("cuda") 
+        tokens = self.tokenizer(sentences, padding=True, truncation=True, return_tensors="pt", max_length=256).to("cuda") 
+        # Conversion des user_embeddings (liste numpy -> tensor GPU)
+        if isinstance(user_embeddings, list):
+            user_embeddings = torch.from_numpy(
+                np.array(user_embeddings, dtype=np.float32)
+            ).to("cuda")
         self.eval()
         with torch.no_grad():
+            # Nettoyage GPU
+            torch.cuda.empty_cache()
+            #torch.cuda.synchronize()
             probas = self(tokens, user_embeddings)
             labels = torch.argmax(probas, dim=1).cpu().numpy()
             mapping = np.array(["BAISSE", "HAUSSE"])
             sentiments = mapping[labels]
-            # Nettoyage GPU
             del tokens
             del probas
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
             return sentiments
 
     def save(self):

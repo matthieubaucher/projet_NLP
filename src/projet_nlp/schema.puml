@@ -1,0 +1,56 @@
+@startuml
+title Architecture du modèle
+
+skinparam rectangle {
+  BackgroundColor #EEF2F7
+  BorderColor #4A6FA5
+  FontColor #1A1A1A
+}
+
+skinparam arrow {
+  Color #4A6FA5
+}
+
+rectangle "messages\n(B,str)" as INPUT_MSG
+rectangle "user embeddings\n(B,769)" as INPUT_USER_EMB
+rectangle "previous user embeddings\n(B,768)" as INPUT_USER_PREVIOUS_MSG_EMB
+
+
+node "Roberta\n(twitter-roberta-base-sentiment)" as MSG
+node "Transformer 1 layer\nInitialized by roberta last layer" as USER_ENC
+node "Transformer 1 layer\nInitialized by roberta last layer" as PREV_ENC
+
+
+node "Linear (B,768) → (B,2)\n+Tanh" as USER_EMB
+node "Linear (B,768) → (B,2)\n+Tanh" as PREV_EMB
+
+node "Concat -> (B,772)" as CONCAT
+
+node "Linear (B,772) → (B,128)\n+Tanh" as LAYER_1
+node "Linear (B,128) → (B,64)\n+Tanh" as LAYER_2
+node "Linear (B,64)→ (B,2)\n+Softmax" as FINAL_LAYER
+
+rectangle "Bullish/Bearish sentiment" as RESULT
+
+INPUT_MSG -> MSG 
+INPUT_USER_EMB -> USER_ENC
+INPUT_USER_PREVIOUS_MSG_EMB -> PREV_ENC
+
+MSG -> CONCAT
+
+USER_ENC -> USER_EMB 
+USER_EMB -> CONCAT
+
+PREV_ENC -> PREV_EMB
+PREV_EMB -> CONCAT
+CONCAT -> LAYER_1
+LAYER_1-> LAYER_2 
+LAYER_2-> FINAL_LAYER
+FINAL_LAYER -> RESULT
+
+USER_ENC -[hidden]-> MSG
+PREV_ENC -[hidden]-> USER_ENC
+
+
+
+@enduml

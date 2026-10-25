@@ -139,7 +139,7 @@ def stable_hash(ids):
     return hashlib.sha1(s.encode()).hexdigest()
 
 def load_filtered_messages(message_ids):
-    k = 10
+    k = 12
     filename = "dfm" + stable_hash(message_ids) + ".parquet"
 
     if os.path.exists(filename):
@@ -300,6 +300,7 @@ def generate_dataframe_sentiment(symbols):
         "symbol",
         "sentiment",
         "text_clean",
+        "message_id"
     ]]
 
     return final_df
