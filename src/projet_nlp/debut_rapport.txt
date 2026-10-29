@@ -70,7 +70,8 @@ ajout du previous embedding                      : 86.6%     86.7%      88.6%   
 ajout du previous embedding et du user embedding : 89.1%     89.6%      88.7%        90.3%
 
 Sur les tweets long (qui sont beaucoup moins nombreux), on note une légère baisse de performances avec l'ajout du contexte surtout celui du previous
- embedding. Mais la performance globale s'améliore car les tweets majoritaires font moins de 32 tokens. 
+ embedding. Mais la performance globale s'améliore car les tweets majoritaires font moins de 32 tokens. Si on prennait les perfs max pour chaque modèle,
+ on voit qu'on atteindrait les 90% au global ...
 
 Conclusion : on peut donc avoir une très bonne prévision des tweets en prennant en compte la personnalité de l'utilisateur et ses précédent tweets, et
 ce, même avec des tweets ambigus. 

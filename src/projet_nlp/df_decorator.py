@@ -309,12 +309,9 @@ def split_size(train, withCtx):
 # IN : un df avec des sentiments
 # OUT : le df purgé de ses UNKNOWN et d'une partie des HAUSSE ou de ses BAISSE suivant qui était en excés
 def equilibre_HAUSSE_BAISSE(df):
-    #print("toto debut=",len(df))
     df = df[df["sentiment"]!="UNKNOWN"]
     count_baisse = (df["sentiment"]=="BAISSE").sum()
     count_hausse = (df["sentiment"]=="HAUSSE").sum()
-    #print("toto count_baisse=",count_baisse)
-    #print("toto count_hausse=",count_hausse)
     if count_baisse == count_hausse:
         return df
     df_baisse = df[df["sentiment"] == "BAISSE"]
@@ -325,7 +322,6 @@ def equilibre_HAUSSE_BAISSE(df):
     else:
         df_baisse_balanced = df_baisse.sample(len(df_hausse), random_state=42)
         df = pd.concat([df_hausse, df_baisse_balanced]).sample(frac=1, random_state=42)
-    #print("toto=",len(df))
     return df
 
 # PRIVATE
@@ -345,14 +341,8 @@ def train_embedding_model(df, model_name=ROBERTA_S, nom_sauvegarde="dernier", df
     df_val = equilibre_HAUSSE_BAISSE(df_validation)
     train = create_dataset(df_train, withCtx)
     validation = create_dataset(df_val, withCtx)
-    #print("taille train =",len(train))
-    #print("taille validation =",len(validation))
     train32, train64, train128, train256, train512 = split_size(train, withCtx)
     validation32, validation64, validation128, validation256, validation512 = split_size(validation, withCtx)
-    #print("taille validation32 =",len(validation32))
-    #print("taille validation64 =",len(validation64))
-    #print("taille train32 =",len(train32))
-    #print("taille train64 =",len(train64))
     
     print(f"Nombre d'éléments pour l'entrainement = {len(df_train)}")
 
